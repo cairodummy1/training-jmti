@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Dashboard - ESP32 Control with AI Detection</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .status {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-top: 10px;
+            margin-right: 10px;
+        }
+
+        .status.connected {
+            background: #4caf50;
+        }
+
+        .status.disconnected {
+            background: #f44336;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: transform 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+        }
+
+        .card h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .control-section {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+
+        .control-label {
+            font-size: 1.1em;
+            color: #555;
+            font-weight: 600;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 60px;
+            height: 30px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 30px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 22px;
+            width: 22px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: #4caf50;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(30px);
+        }
+
+        input:disabled + .slider {
+            background-color: #ddd;
+            cursor: not-allowed;
+        }
+
+        .state-display {
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        .state-display.on {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .state-display.off {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .ai-status-indicator {
+            text-align: center;
+            padding: 15px;
+            border-radius: 8px;
+            font-weight: bold;
+            margin-top: 10px;
+            font-size: 1.2em;
+        }
+
+        .ai-status-indicator.detected {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .ai-status-indicator.not-detected {
+            background: #fff3e0;
+            color: #e65100;
+        }
+
+        .confidence-display {
+            text-align: center;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 10px;
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .slider-input {
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .slider-input input[type="range"] {
+            width: 100%;
+            height: 8px;
+            border-radius: 5px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        .slider-input input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+        }
+
+        .slider-input input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+            border: none;
+        }
+
+        .slider-value {
+            text-align: center;
+            margin-top: 5px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .config-section {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+        }
+
+        .config-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .config-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .config-item label {
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 5px;
+        }
+
+        .config-item input {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 1em;
+        }
+
+        .config-item input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            transition: background 0.3s ease;
+        }
+
+        .btn:hover {
+            background: #5568d3;
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .error-message {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .event-log-card {
+            grid-column: 1 / -1;
+        }
+
+        .event-log-container {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 10px;
+            background: #fafafa;
+        }
+
+        .event-log-item {
+            padding: 10px 15px;
+            margin-bottom: 8px;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+            background: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.9em;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .event-log-item.ai-action {
+            border-left-color: #4caf50;
+            background: #f1f8e9;
+        }
+
+        .event-log-item.human-action {
+            border-left-color: #2196f3;
+            background: #e3f2fd;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .event-log-item .event-info {
+            flex: 1;
+        }
+
+        .event-log-item .event-time {
+            color: #666;
+            font-size: 0.85em;
+            margin-right: 10px;
+        }
+
+        .event-log-item .event-source {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .event-log-item .event-source.ai {
+            background: #4caf50;
+            color: white;
+        }
+
+        .event-log-item .event-source.human {
+            background: #2196f3;
+            color: white;
+        }
+
+        .event-log-empty {
+            text-align: center;
+            color: #999;
+            padding: 40px;
+            font-style: italic;
+        }
+
+        .clear-log-btn {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background: #ff5722;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: 600;
+        }
+
+        .clear-log-btn:hover {
+            background: #e64a19;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌡️ IoT Dashboard with AI Detection</h1>
+            <div class="status disconnected" id="mqttStatus">MQTT: Disconnected</div>
+        </div>
+
+        <div class="config-section">
+            <h2>⚙️ Configuration</h2>
+            <div class="config-grid">
+                <div class="config-item">
+                    <label>MQTT Broker</label>
+                    <input type="text" id="mqttHost" value="localhost" placeholder="localhost">
+                </div>
+                <div class="config-item">
+                    <label>MQTT Port (WebSocket)</label>
+                    <input type="number" id="mqttPort" value="9001" placeholder="9001">
+                    <small style="color: #666; font-size: 0.85em; margin-top: 3px;">Usually 9001 for WebSocket</small>
+                </div>
+            </div>
+            <button class="btn" onclick="connectServices()" style="margin-top: 15px;">Connect</button>
+            <div class="error-message" id="errorMessage"></div>
+        </div>
+
+        <div class="dashboard-grid">
+            <div class="card">
+                <h2>🤖 AI Detection Control</h2>
+                <div class="control-section">
+                    <span class="control-label">AI Control</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="aiControlToggle" onchange="toggleAIControl(this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="slider-input">
+                    <label class="control-label">Confidence Threshold: <span id="thresholdValue">50</span>%</label>
+                    <input type="range" id="confidenceThreshold" min="0" max="100" value="50" 
+                           oninput="updateThreshold(this.value)" onchange="publishThreshold(this.value)">
+                    <div class="slider-value" id="thresholdDisplay">50%</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>👁️ AI Detection Status</h2>
+                <div class="ai-status-indicator not-detected" id="aiStatus">NOT DETECTED</div>
+                <div class="confidence-display" id="aiConfidence">0.00%</div>
+            </div>
+
+            <div class="card">
+                <h2>💡 LED Control</h2>
+                <div class="control-section">
+                    <span class="control-label">LED State</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="ledToggle" onchange="toggleLED(this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="state-display off" id="ledState">OFF</div>
+            </div>
+
+            <div class="card">
+                <h2>🔊 Buzzer Control</h2>
+                <div class="control-section">
+                    <span class="control-label">Buzzer State</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="buzzerToggle" onchange="toggleBuzzer(this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="state-display off" id="buzzerState">OFF</div>
+            </div>
+        </div>
+
+        <div class="card event-log-card">
+            <h2>📋 Event Log</h2>
+            <div class="event-log-container" id="eventLogContainer">
+                <div class="event-log-empty" id="eventLogEmpty">No events yet. Actions will appear here.</div>
+            </div>
+            <button class="clear-log-btn" onclick="clearEventLog()">Clear Log</button>
+        </div>
+    </div>
+
+    <script>
+        let mqttClient = null;
+        let aiControlEnabled = false;
+        let eventLog = [];
+        let maxLogEntries = 100;
+        let previousLedState = null;
+        let previousBuzzerState = null;
+        let pendingLedAction = null; // Track if we're expecting a state change from a manual action
+        let pendingBuzzerAction = null;
+
+        function connectServices() {
+            const mqttHost = document.getElementById('mqttHost').value;
+            const mqttPort = parseInt(document.getElementById('mqttPort').value);
+
+            // Connect to MQTT
+            connectMQTT(mqttHost, mqttPort);
+        }
+
+        function connectMQTT(host, port) {
+            // Use WebSocket protocol for browser MQTT connection
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const mqttUrl = `${protocol}//${host}:${port}`;
+
+            try {
+                mqttClient = mqtt.connect(mqttUrl, {
+                    clientId: 'dashboard_' + Math.random().toString(16).substr(2, 8),
+                    reconnectPeriod: 5000,
+                    connectTimeout: 10000
+                });
+
+                mqttClient.on('connect', () => {
+                    console.log('Connected to MQTT broker');
+                    updateStatus('mqttStatus', true);
+                    
+                    // Subscribe to state topics
+                    mqttClient.subscribe('esp32/led/state', (err) => {
+                        if (err) console.error('Error subscribing to LED state:', err);
+                    });
+                    mqttClient.subscribe('esp32/buzzer/state', (err) => {
+                        if (err) console.error('Error subscribing to buzzer state:', err);
+                    });
+                    // Subscribe to AI topics
+                    mqttClient.subscribe('ai/detection/status', (err) => {
+                        if (err) console.error('Error subscribing to AI status:', err);
+                    });
+                    mqttClient.subscribe('ai/detection/confidence', (err) => {
+                        if (err) console.error('Error subscribing to AI confidence:', err);
+                    });
+                });
+
+                mqttClient.on('message', (topic, message) => {
+                    const payload = message.toString();
+                    console.log(`Received message on ${topic}: ${payload}`);
+
+                    if (topic === 'esp32/led/state') {
+                        const newState = payload === '1';
+                        // Only log if state actually changed
+                        if (previousLedState !== null && newState !== previousLedState) {
+                            // If we have a pending action, it was from human (already logged)
+                            // Otherwise, if AI control is enabled, it was from AI
+                            if (pendingLedAction === null && aiControlEnabled) {
+                                logEvent('LED', newState ? 'ON' : 'OFF', 'AI');
+                            }
+                            // Clear pending action
+                            pendingLedAction = null;
+                        }
+                        previousLedState = newState;
+                        updateDeviceState('led', newState);
+                    } else if (topic === 'esp32/buzzer/state') {
+                        const newState = payload === '1';
+                        // Only log if state actually changed
+                        if (previousBuzzerState !== null && newState !== previousBuzzerState) {
+                            // If we have a pending action, it was from human (already logged)
+                            // Otherwise, if AI control is enabled, it was from AI
+                            if (pendingBuzzerAction === null && aiControlEnabled) {
+                                logEvent('Buzzer', newState ? 'ON' : 'OFF', 'AI');
+                            }
+                            // Clear pending action
+                            pendingBuzzerAction = null;
+                        }
+                        previousBuzzerState = newState;
+                        updateDeviceState('buzzer', newState);
+                    } else if (topic === 'ai/detection/status') {
+                        updateAIStatus(payload === 'DETECTED');
+                    } else if (topic === 'ai/detection/confidence') {
+                        updateAIConfidence(parseFloat(payload));
+                    }
+                });
+
+                mqttClient.on('error', (error) => {
+                    console.error('MQTT error:', error);
+                    updateStatus('mqttStatus', false);
+                    showError('MQTT connection error: ' + error.message);
+                });
+
+                mqttClient.on('close', () => {
+                    console.log('MQTT connection closed');
+                    updateStatus('mqttStatus', false);
+                });
+
+                mqttClient.on('offline', () => {
+                    console.log('MQTT client offline');
+                    updateStatus('mqttStatus', false);
+                });
+            } catch (error) {
+                console.error('Error connecting to MQTT:', error);
+                showError('MQTT connection error: ' + error.message);
+                updateStatus('mqttStatus', false);
+            }
+        }
+
+        function toggleAIControl(checked) {
+            if (!mqttClient || !mqttClient.connected) {
+                showError('MQTT not connected. Please connect first.');
+                document.getElementById('aiControlToggle').checked = !checked;
+                return;
+            }
+
+            aiControlEnabled = checked;
+            const message = checked ? 'ON' : 'OFF';
+            mqttClient.publish('ai/control', message, (err) => {
+                if (err) {
+                    console.error('Error publishing AI control:', err);
+                    showError('Failed to control AI: ' + err.message);
+                    document.getElementById('aiControlToggle').checked = !checked;
+                } else {
+                    logEvent('AI Control', checked ? 'ENABLED' : 'DISABLED', 'HUMAN');
+                    updateManualControlsState();
+                }
+            });
+        }
+
+        function updateThreshold(value) {
+            document.getElementById('thresholdValue').textContent = value;
+            document.getElementById('thresholdDisplay').textContent = value + '%';
+        }
+
+        function publishThreshold(value) {
+            if (!mqttClient || !mqttClient.connected) {
+                return;
+            }
+
+            mqttClient.publish('ai/threshold', value, (err) => {
+                if (err) {
+                    console.error('Error publishing threshold:', err);
+                }
+            });
+        }
+
+        function toggleLED(checked) {
+            if (!mqttClient || !mqttClient.connected) {
+                showError('MQTT not connected. Please connect first.');
+                document.getElementById('ledToggle').checked = !checked;
+                return;
+            }
+
+            if (aiControlEnabled) {
+                showError('Cannot manually control LED when AI control is enabled.');
+                document.getElementById('ledToggle').checked = !checked;
+                return;
+            }
+
+            const message = checked ? 'ON' : 'OFF';
+            // Mark that we're expecting a state change from manual action
+            pendingLedAction = { action: message };
+            mqttClient.publish('esp32/led/control', message, (err) => {
+                if (err) {
+                    console.error('Error publishing LED control:', err);
+                    showError('Failed to control LED: ' + err.message);
+                    document.getElementById('ledToggle').checked = !checked;
+                    pendingLedAction = null;
+                } else {
+                    // Log event when human manually controls LED
+                    logEvent('LED', message, 'HUMAN');
+                }
+            });
+        }
+
+        function toggleBuzzer(checked) {
+            if (!mqttClient || !mqttClient.connected) {
+                showError('MQTT not connected. Please connect first.');
+                document.getElementById('buzzerToggle').checked = !checked;
+                return;
+            }
+
+            if (aiControlEnabled) {
+                showError('Cannot manually control buzzer when AI control is enabled.');
+                document.getElementById('buzzerToggle').checked = !checked;
+                return;
+            }
+
+            const message = checked ? 'ON' : 'OFF';
+            // Mark that we're expecting a state change from manual action
+            pendingBuzzerAction = { action: message };
+            mqttClient.publish('esp32/buzzer/control', message, (err) => {
+                if (err) {
+                    console.error('Error publishing buzzer control:', err);
+                    showError('Failed to control buzzer: ' + err.message);
+                    document.getElementById('buzzerToggle').checked = !checked;
+                    pendingBuzzerAction = null;
+                } else {
+                    // Log event when human manually controls Buzzer
+                    logEvent('Buzzer', message, 'HUMAN');
+                }
+            });
+        }
+
+        function updateManualControlsState() {
+            const ledToggle = document.getElementById('ledToggle');
+            const buzzerToggle = document.getElementById('buzzerToggle');
+            
+            if (aiControlEnabled) {
+                ledToggle.disabled = true;
+                buzzerToggle.disabled = true;
+            } else {
+                ledToggle.disabled = false;
+                buzzerToggle.disabled = false;
+            }
+        }
+
+        function updateDeviceState(device, state) {
+            const toggle = document.getElementById(device + 'Toggle');
+            const stateDisplay = document.getElementById(device + 'State');
+            
+            if (toggle && !toggle.disabled) toggle.checked = state;
+            if (stateDisplay) {
+                stateDisplay.textContent = state ? 'ON' : 'OFF';
+                stateDisplay.className = 'state-display ' + (state ? 'on' : 'off');
+            }
+        }
+
+        function updateAIStatus(detected) {
+            const statusElement = document.getElementById('aiStatus');
+            if (statusElement) {
+                statusElement.textContent = detected ? 'DETECTED' : 'NOT DETECTED';
+                statusElement.className = 'ai-status-indicator ' + (detected ? 'detected' : 'not-detected');
+            }
+        }
+
+        function updateAIConfidence(confidence) {
+            const confidenceElement = document.getElementById('aiConfidence');
+            if (confidenceElement) {
+                confidenceElement.textContent = confidence.toFixed(2) + '%';
+            }
+        }
+
+        function updateStatus(elementId, connected) {
+            const element = document.getElementById(elementId);
+            if (element) {
+                element.textContent = element.textContent.split(':')[0] + ': ' + (connected ? 'Connected' : 'Disconnected');
+                element.className = 'status ' + (connected ? 'connected' : 'disconnected');
+            }
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.classList.add('show');
+        }
+
+        function hideError() {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.classList.remove('show');
+        }
+
+        function logEvent(device, action, source) {
+            const timestamp = new Date();
+            const timeString = timestamp.toLocaleTimeString();
+            const dateString = timestamp.toLocaleDateString();
+
+            const event = {
+                id: Date.now(),
+                device: device,
+                action: action,
+                source: source,
+                timestamp: timestamp,
+                timeString: timeString,
+                dateString: dateString
+            };
+
+            eventLog.unshift(event); // Add to beginning of array
+
+            // Limit log size
+            if (eventLog.length > maxLogEntries) {
+                eventLog = eventLog.slice(0, maxLogEntries);
+            }
+
+            renderEventLog();
+        }
+
+        function renderEventLog() {
+            const container = document.getElementById('eventLogContainer');
+            const emptyDiv = document.getElementById('eventLogEmpty');
+
+            if (eventLog.length === 0) {
+                emptyDiv.style.display = 'block';
+                container.innerHTML = '';
+                container.appendChild(emptyDiv);
+                return;
+            }
+
+            emptyDiv.style.display = 'none';
+
+            // Clear container except empty div
+            const existingItems = container.querySelectorAll('.event-log-item');
+            existingItems.forEach(item => item.remove());
+
+            // Render events
+            eventLog.forEach(event => {
+                const item = document.createElement('div');
+                item.className = `event-log-item ${event.source.toLowerCase()}-action`;
+
+                const infoDiv = document.createElement('div');
+                infoDiv.className = 'event-info';
+                infoDiv.innerHTML = `<strong>${event.device}</strong> turned <strong>${event.action}</strong>`;
+
+                const timeDiv = document.createElement('div');
+                timeDiv.className = 'event-time';
+                timeDiv.textContent = `${event.dateString} ${event.timeString}`;
+
+                const sourceDiv = document.createElement('div');
+                sourceDiv.className = `event-source ${event.source.toLowerCase()}`;
+                sourceDiv.textContent = event.source;
+
+                item.appendChild(infoDiv);
+                item.appendChild(timeDiv);
+                item.appendChild(sourceDiv);
+
+                container.insertBefore(item, emptyDiv);
+            });
+        }
+
+        function clearEventLog() {
+            if (confirm('Are you sure you want to clear the event log?')) {
+                eventLog = [];
+                previousLedState = null;
+                previousBuzzerState = null;
+                pendingLedAction = null;
+                pendingBuzzerAction = null;
+                renderEventLog();
+            }
+        }
+
+        // Auto-connect on page load if default values are present
+        window.addEventListener('load', () => {
+            // Optionally auto-connect, or wait for user to click Connect
+            // connectServices();
+        });
+    </script>
+</body>
+</html>
