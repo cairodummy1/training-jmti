@@ -4,6 +4,7 @@ import time
 import json
 import paho.mqtt.client as mqtt
 from ultralytics import YOLO
+import threading
 
 # MQTT Configuration - Local Mosquitto broker (no TLS, no auth)
 print("=== MQTT Configuration ===")
@@ -23,6 +24,14 @@ TOPIC_AI_THRESHOLD = "ai/threshold"  # Confidence threshold (0-100)
 # Global variables for AI control
 ai_control_enabled = False
 confidence_threshold = 0.5  # Default 50%
+
+# Track last-known actuator states (updated from TOPIC_LED_STATE/TOPIC_BUZZER_STATE)
+# Values will be 'ON'/'OFF' or None until a state message is received.
+led_state = None
+buzzer_state = None
+
+# Lock to protect shared variables accessed from MQTT callback thread and main loop
+state_lock = threading.Lock()
 
 # Create MQTT client (no TLS, no authentication for local broker)
 mqtt_client = mqtt.Client()
@@ -46,11 +55,33 @@ def on_message(client, userdata, msg):
     payload = msg.payload.decode()
     
     print(f"MQTT: {topic} = {payload}")
+
+    # Track reported LED/Buzzer states so we can avoid redundant commands
+    if topic == TOPIC_LED_STATE:
+        with state_lock:
+            # Normalize to 'ON'/'OFF' (leave other payloads as-is)
+            led_state = payload.upper()
+        return
+    elif topic == TOPIC_BUZZER_STATE:
+        with state_lock:
+            buzzer_state = payload.upper()
+        return
     
     # Handle AI control toggle
     if topic == TOPIC_AI_CONTROL:
-        ai_control_enabled = (payload.upper() == "ON" or payload == "1")
+        prev = None
+        with state_lock:
+            prev = ai_control_enabled
+            ai_control_enabled = (payload.upper() == "ON" or payload == "1")
+
         print(f"AI Control: {'ENABLED' if ai_control_enabled else 'DISABLED'}")
+
+        # If AI control was just enabled, reconcile actuator states to the current detection state
+        if ai_control_enabled and not prev:
+            try:
+                reconcile_actuators()
+            except Exception as e:
+                print(f"Error during actuator reconciliation: {e}")
     
     # Handle confidence threshold
     elif topic == TOPIC_AI_THRESHOLD:
@@ -64,12 +95,40 @@ def on_message(client, userdata, msg):
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 
+
+def reconcile_actuators():
+    """Compare the desired actuator state (based on recent detection/confidence)
+    with the last-known actuator states reported via MQTT. Publish control commands
+    only when a change is needed. This helps avoid rapid or redundant toggles and
+    makes AI control deterministic when toggled ON.
+    """
+    global led_state, buzzer_state
+    # Determine desired state based on detection logic available in main loop
+    with state_lock:
+        # When called from MQTT thread, detection_counter/current_confidence may be slightly stale
+        # but that's acceptable; we use the latest values available.
+        detected_enough = (detection_counter >= detection_cooldown and current_confidence >= confidence_threshold)
+        desired = "ON" if detected_enough else "OFF"
+
+        # Publish only when last-known state differs from desired or is unknown
+        if led_state != desired:
+            mqtt_client.publish(TOPIC_LED_CONTROL, desired)
+            print(f"MQTT: Reconcile -> Sent {TOPIC_LED_CONTROL} = {desired}")
+            led_state = desired
+
+        if buzzer_state != desired:
+            mqtt_client.publish(TOPIC_BUZZER_CONTROL, desired)
+            print(f"MQTT: Reconcile -> Sent {TOPIC_BUZZER_CONTROL} = {desired}")
+            buzzer_state = desired
+
 # Connect to MQTT broker
 print(f"\nConnecting to {MQTT_BROKER}:{MQTT_PORT}...")
 try:
+    # Establish TCP connection to broker but don't start the network loop yet.
+    # Starting the loop spawns a background thread that prints incoming MQTT
+    # messages to stdout; we postpone that until after interactive prompts
+    # and camera initialization so prompts are not interleaved with MQTT noise.
     mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    mqtt_client.loop_start()
-    time.sleep(2)  # Wait for connection
 except Exception as e:
     print(f"MQTT connection failed: {e}")
     exit(1)
@@ -103,6 +162,24 @@ CAP_HEIGHT = int(input("Enter capture height (default 720): ").strip() or "720")
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAP_WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAP_HEIGHT)
+if not cap.isOpened():
+    print(f"\n✗ Could not open video capture device 0. Check camera index, permissions, or that a camera is connected.")
+    # If we connected to MQTT earlier, ensure we cleanly disconnect.
+    try:
+        mqtt_client.disconnect()
+    except Exception:
+        pass
+    exit(1)
+
+# Now that interactive prompts and camera init are done, start the MQTT network loop
+# so incoming messages will be handled and subscriptions completed.
+mqtt_loop_started = False
+try:
+    mqtt_client.loop_start()
+    mqtt_loop_started = True
+    time.sleep(1)  # Give the loop a moment to trigger on_connect and subscriptions
+except Exception:
+    print("Warning: failed to start MQTT network loop; continuing without background MQTT processing.")
 
 print(f"\n✓ Video capture initialized at {CAP_WIDTH}x{CAP_HEIGHT}")
 
@@ -147,37 +224,56 @@ try:
                 conf = float(box.conf)
                 max_confidence = max(max_confidence, conf)
         
-        current_confidence = max_confidence
+        # Update detection state and cooldown counter (protected by state_lock so MQTT callbacks
+        # can read a consistent view when reconciling)
+        with state_lock:
+            current_confidence = max_confidence
+            # Publish AI detection status and confidence to MQTT using the live value
+            status = "DETECTED" if detected else "NOT_DETECTED"
+            mqtt_client.publish(TOPIC_AI_STATUS, status)
+            mqtt_client.publish(TOPIC_AI_CONFIDENCE, f"{current_confidence * 100:.2f}")
 
-        # Publish AI detection status and confidence to MQTT
-        status = "DETECTED" if detected else "NOT_DETECTED"
-        mqtt_client.publish(TOPIC_AI_STATUS, status)
-        mqtt_client.publish(TOPIC_AI_CONFIDENCE, f"{current_confidence * 100:.2f}")
+            if detected and current_confidence >= confidence_threshold:
+                detection_counter += 1
+            else:
+                detection_counter -= 1
 
-        # Update detection logic with cooldown mechanism
-        if detected and current_confidence >= confidence_threshold:
-            detection_counter += 1
-        else:
-            detection_counter -= 1
+            # Clamp the counter within the cooldown range
+            detection_counter = max(0, min(detection_cooldown, detection_counter))
 
-        # Clamp the counter within the cooldown range
-        detection_counter = max(0, min(detection_cooldown, detection_counter))
+            # Read a snapshot of AI control flag for use outside the lock
+            ai_enabled_snapshot = ai_control_enabled
+            detection_counter_snapshot = detection_counter
+            current_confidence_snapshot = current_confidence
 
         # Only control LED and buzzer if AI control is enabled
-        if ai_control_enabled:
+        if ai_enabled_snapshot:
             # Trigger LED and Buzzer ON if the object is consistently detected above threshold
-            if detection_counter == detection_cooldown and not object_detected:
-                print(f"✓ {selected_class_name} detected (confidence: {current_confidence*100:.1f}%), turning LED and Buzzer ON.")
-                mqtt_client.publish(TOPIC_LED_CONTROL, "ON")
-                mqtt_client.publish(TOPIC_BUZZER_CONTROL, "ON")
+            if detection_counter_snapshot == detection_cooldown and not object_detected:
+                print(f"✓ {selected_class_name} detected (confidence: {current_confidence_snapshot*100:.1f}%), turning LED and Buzzer ON.")
+                # Publish only if last-known state differs
+                with state_lock:
+                    if led_state != "ON":
+                        mqtt_client.publish(TOPIC_LED_CONTROL, "ON")
+                        led_state = "ON"
+                    if buzzer_state != "ON":
+                        mqtt_client.publish(TOPIC_BUZZER_CONTROL, "ON")
+                        buzzer_state = "ON"
+
                 object_detected = True
 
             # Trigger LED and Buzzer OFF if the object is consistently not detected or below threshold
-            elif detection_counter == 0 and object_detected:
-                reason = "not detected" if not detected else f"confidence ({current_confidence*100:.1f}%) below threshold ({confidence_threshold*100:.1f}%)"
+            elif detection_counter_snapshot == 0 and object_detected:
+                reason = "not detected" if not detected else f"confidence ({current_confidence_snapshot*100:.1f}%) below threshold ({confidence_threshold*100:.1f}%)"
                 print(f"✗ {selected_class_name} {reason}, turning LED and Buzzer OFF.")
-                mqtt_client.publish(TOPIC_LED_CONTROL, "OFF")
-                mqtt_client.publish(TOPIC_BUZZER_CONTROL, "OFF")
+                with state_lock:
+                    if led_state != "OFF":
+                        mqtt_client.publish(TOPIC_LED_CONTROL, "OFF")
+                        led_state = "OFF"
+                    if buzzer_state != "OFF":
+                        mqtt_client.publish(TOPIC_BUZZER_CONTROL, "OFF")
+                        buzzer_state = "OFF"
+
                 object_detected = False
 
         # Display detections on the frame
@@ -217,9 +313,17 @@ except KeyboardInterrupt:
 
 finally:
     # Disconnect from MQTT
-    mqtt_client.loop_stop()
-    mqtt_client.disconnect()
-    print("✓ Disconnected from MQTT broker")
+    try:
+        if 'mqtt_loop_started' in globals() and mqtt_loop_started:
+            mqtt_client.loop_stop()
+    except Exception:
+        pass
+
+    try:
+        mqtt_client.disconnect()
+        print("✓ Disconnected from MQTT broker")
+    except Exception:
+        pass
     
     # Release the webcam and close OpenCV windows
     cap.release()

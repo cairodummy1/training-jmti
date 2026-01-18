@@ -3,11 +3,11 @@
 #include <PubSubClient.h>
 
 // Configuration - Update these values for your setup
-#define WIFI_SSID "your-wifi-ssid"
-#define WIFI_PASSWORD "your-wifi-password"
+#define WIFI_SSID "realme"
+#define WIFI_PASSWORD "ikmalghani"
 
 // Local Mosquitto MQTT configuration (no TLS, no auth)
-#define MQTT_SERVER "192.168.1.100"
+#define MQTT_SERVER "10.87.7.162"
 #define MQTT_PORT 1883
 
 // MQTT Topics
