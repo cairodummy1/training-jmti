@@ -13,8 +13,8 @@ echo "=== Step 3: Remove PyTorch cache ==="
 rm -rf ~/.cache/torch
 
 echo "=== Step 4: Download NVIDIA wheels ==="
-mkdir -p ~/jetson_torch_wheels
-cd ~/jetson_torch_wheels
+mkdir -p Downloads/jetson_torch_wheels
+cd Downloads/jetson_torch_wheels
 
 wget -O torch-2.3.0-cp310-cp310-linux_aarch64.whl \
   https://nvidia.box.com/shared/static/mp164asf3sceb570wvjsrezk1p4ftj8t.whl
